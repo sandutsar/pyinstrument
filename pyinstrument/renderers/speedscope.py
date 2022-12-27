@@ -7,8 +7,8 @@ from enum import Enum
 from typing import Any, Dict, Union
 
 from pyinstrument import processors
-from pyinstrument.frame import BaseFrame
-from pyinstrument.renderers.base import ProcessorList, Renderer
+from pyinstrument.frame import Frame
+from pyinstrument.renderers.base import FrameRenderer, ProcessorList
 from pyinstrument.session import Session
 
 # pyright: strict
@@ -114,7 +114,7 @@ class SpeedscopeEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, o)
 
 
-class SpeedscopeRenderer(Renderer):
+class SpeedscopeRenderer(FrameRenderer):
     """
     Outputs a tree of JSON conforming to the speedscope schema documented at
 
@@ -141,7 +141,7 @@ class SpeedscopeRenderer(Renderer):
         # speedscope's schema.
         self._frame_to_index: dict[SpeedscopeFrame, int] = {}
 
-    def render_frame(self, frame: BaseFrame | None) -> list[SpeedscopeEvent]:
+    def render_frame(self, frame: Frame | None) -> list[SpeedscopeEvent]:
         """
         Builds up a list of speedscope events that are used to populate the
         "events" array in speedscope-formatted JSON.
@@ -194,7 +194,11 @@ class SpeedscopeRenderer(Renderer):
         # variant also adds a branch & swap for each summand. Pairwise
         # summation isn't an option here because a running total is
         # needed.
-        self._event_time += frame.self_time
+
+        self._event_time += frame.absorbed_time
+        if frame.is_synthetic_leaf:
+            # only time contained within leaf nodes is real time i.e. not the sum of children
+            self._event_time += frame.time
 
         # Add event closing this stack frame.
         close_event = SpeedscopeEvent(SpeedscopeEventType.CLOSE, self._event_time, sframe_index)
@@ -206,7 +210,7 @@ class SpeedscopeRenderer(Renderer):
         frame = self.preprocess(session.root_frame())
 
         id_: str = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime(session.start_time))
-        name: str = "CPU profile for {} at {}".format(session.program, id_)
+        name: str = f"CPU profile for {session.program} at {id_}"
 
         sprofile_list: list[SpeedscopeProfile] = [
             SpeedscopeProfile(name, self.render_frame(frame), session.duration)
@@ -230,8 +234,10 @@ class SpeedscopeRenderer(Renderer):
         """
         return [
             processors.remove_importlib,
+            processors.remove_tracebackhide,
             processors.merge_consecutive_self_time,
             processors.group_library_frames_processor,
             processors.remove_unnecessary_self_time_nodes,
             processors.remove_irrelevant_nodes,
+            processors.remove_first_pyinstrument_frames_processor,
         ]

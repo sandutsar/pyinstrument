@@ -3,30 +3,39 @@ from typing import Any
 
 import pyinstrument
 from pyinstrument import processors
-from pyinstrument.frame import BaseFrame
-from pyinstrument.renderers.base import ProcessorList, Renderer
+from pyinstrument.frame import Frame
+from pyinstrument.renderers.base import FrameRenderer, ProcessorList
 from pyinstrument.session import Session
+from pyinstrument.typing import LiteralStr
 from pyinstrument.util import truncate
 
 # pyright: strict
 
 
-class ConsoleRenderer(Renderer):
+class ConsoleRenderer(FrameRenderer):
     """
     Produces text-based output, suitable for text files or ANSI-compatible
     consoles.
     """
 
-    def __init__(self, unicode: bool = False, color: bool = False, **kwargs: Any):
+    def __init__(
+        self,
+        unicode: bool = False,
+        color: bool = False,
+        time: LiteralStr["seconds", "percent_of_total"] = "seconds",
+        **kwargs: Any,
+    ):
         """
         :param unicode: Use unicode, like box-drawing characters in the output.
         :param color: Enable color support, using ANSI color sequences.
+        :param time: How to display the duration of each frame - ``'seconds'`` or ``'percent_of_total'``
         """
         super().__init__(**kwargs)
 
         self.unicode = unicode
         self.color = color
         self.colors = self.colors_enabled if color else self.colors_disabled
+        self.time = time
 
     def render(self, session: Session):
         result = self.render_preamble(session)
@@ -68,22 +77,35 @@ class ConsoleRenderer(Renderer):
 
         return "\n".join(lines)
 
-    def render_frame(self, frame: BaseFrame, indent: str = "", child_indent: str = "") -> str:
+    def render_frame(self, frame: Frame, indent: str = "", child_indent: str = "") -> str:
         if not frame.group or (
             frame.group.root == frame
-            or frame.total_self_time > 0.2 * self.root_frame.time()
+            or frame.total_self_time > 0.2 * self.root_frame.time
             or frame in frame.group.exit_frames
         ):
-            time_str = self._ansi_color_for_time(frame) + f"{frame.time():.3f}" + self.colors.end
-            function_color = self._ansi_color_for_function(frame)
-            result = "{indent}{time_str} {function_color}{function}{c.end}  {c.faint}{code_position}{c.end}\n".format(
+            if self.time == "percent_of_total":
+                percent = self.frame_proportion_of_total_time(frame) * 100
+                time_str = self._ansi_color_for_time(frame) + f"{percent:.0f}%" + self.colors.end
+            else:
+                time_str = self._ansi_color_for_time(frame) + f"{frame.time:.3f}" + self.colors.end
+
+            name_color = self._ansi_color_for_name(frame)
+
+            class_name = frame.class_name
+            if class_name:
+                name = f"{class_name}.{frame.function}"
+            else:
+                name = frame.function
+
+            result = "{indent}{time_str} {name_color}{name}{c.end}  {c.faint}{code_position}{c.end}\n".format(
                 indent=indent,
                 time_str=time_str,
-                function_color=function_color,
-                function=frame.function,
+                name_color=name_color,
+                name=name,
                 code_position=frame.code_position_short,
                 c=self.colors,
             )
+
             if self.unicode:
                 indents = {"├": "├─ ", "│": "│  ", "└": "└─ ", " ": "   "}
             else:
@@ -116,8 +138,11 @@ class ConsoleRenderer(Renderer):
 
         return result
 
-    def _ansi_color_for_time(self, frame: BaseFrame):
-        proportion_of_total = frame.time() / self.root_frame.time()
+    def frame_proportion_of_total_time(self, frame: Frame):
+        return frame.time / self.root_frame.time
+
+    def _ansi_color_for_time(self, frame: Frame):
+        proportion_of_total = self.frame_proportion_of_total_time(frame)
 
         if proportion_of_total > 0.6:
             return self.colors.red
@@ -128,7 +153,7 @@ class ConsoleRenderer(Renderer):
         else:
             return self.colors.bright_green + self.colors.faint
 
-    def _ansi_color_for_function(self, frame: BaseFrame):
+    def _ansi_color_for_name(self, frame: Frame):
         if frame.is_application_code:
             return self.colors.bg_dark_blue_255 + self.colors.white_255
         else:
@@ -137,11 +162,13 @@ class ConsoleRenderer(Renderer):
     def default_processors(self) -> ProcessorList:
         return [
             processors.remove_importlib,
+            processors.remove_tracebackhide,
             processors.merge_consecutive_self_time,
             processors.aggregate_repeated_calls,
             processors.group_library_frames_processor,
             processors.remove_unnecessary_self_time_nodes,
             processors.remove_irrelevant_nodes,
+            processors.remove_first_pyinstrument_frames_processor,
         ]
 
     class colors_enabled:

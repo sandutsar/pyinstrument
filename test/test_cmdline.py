@@ -1,31 +1,14 @@
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from .util import BUSY_WAIT_SCRIPT
+
 # this script just does a busywait for 0.25 seconds.
-BUSY_WAIT_SCRIPT = """
-import time, sys
-
-def do_nothing():
-    pass
-
-def busy_wait(duration):
-    end_time = time.time() + duration
-
-    while time.time() < end_time:
-        do_nothing()
-
-def main():
-    print('sys.argv: ', sys.argv)
-    busy_wait(0.25)
-
-
-if __name__ == '__main__':
-    main()
-"""
 
 EXECUTION_DETAILS_SCRIPT = f"""
 #!{sys.executable}
@@ -103,13 +86,13 @@ class TestCommandLine:
             [*pyinstrument_invocation, str(program_path), "arg1", "arg2"],
             stderr=subprocess.PIPE,
             check=True,
-            universal_newlines=True,
+            text=True,
         )
         process_native = subprocess.run(
             [sys.executable, str(program_path), "arg1", "arg2"],
             stderr=subprocess.PIPE,
             check=True,
-            universal_newlines=True,
+            text=True,
         )
 
         print("process_pyi.stderr", process_pyi.stderr)
@@ -126,14 +109,14 @@ class TestCommandLine:
             # stderr=subprocess.PIPE,
             check=True,
             cwd=tmp_path,
-            universal_newlines=True,
+            text=True,
         )
         process_native = subprocess.run(
             [sys.executable, "-m", "test_module", "arg1", "arg2"],
             # stderr=subprocess.PIPE,
             check=True,
             cwd=tmp_path,
-            universal_newlines=True,
+            text=True,
         )
 
         print("process_pyi.stderr", process_pyi.stderr)
@@ -160,15 +143,81 @@ class TestCommandLine:
             ],
             stderr=subprocess.PIPE,
             check=True,
-            universal_newlines=True,
+            text=True,
         )
         process_native = subprocess.run(
             ["pyi_test_program", "arg1", "arg2"],
             stderr=subprocess.PIPE,
             check=True,
-            universal_newlines=True,
+            text=True,
         )
 
         print("process_pyi.stderr", process_pyi.stderr)
         print("process_native.stderr", process_native.stderr)
         assert process_pyi.stderr == process_native.stderr
+
+    def test_session_save_and_load(self, pyinstrument_invocation, tmp_path: Path):
+        busy_wait_py = tmp_path / "busy_wait.py"
+        busy_wait_py.write_text(BUSY_WAIT_SCRIPT)
+
+        session_file = tmp_path / "session.pyisession"
+
+        subprocess.check_call(
+            [
+                *pyinstrument_invocation,
+                "--renderer=session",
+                f"--outfile={session_file}",
+                str(busy_wait_py),
+            ]
+        )
+
+        # check it's a valid Session file
+        from pyinstrument.session import Session
+
+        Session.load(session_file)
+
+        # run pyinstrument again to render the output
+        output = subprocess.check_output([*pyinstrument_invocation, f"--load={session_file}"])
+        assert "busy_wait" in str(output)
+        assert "do_nothing" in str(output)
+
+    def test_interval(self, pyinstrument_invocation, tmp_path: Path):
+        busy_wait_py = tmp_path / "busy_wait.py"
+        busy_wait_py.write_text(BUSY_WAIT_SCRIPT)
+
+        output = subprocess.check_output(
+            [
+                *pyinstrument_invocation,
+                "--interval",
+                "0.002",
+                str(busy_wait_py),
+            ]
+        )
+
+        assert "busy_wait" in str(output)
+        assert "do_nothing" in str(output)
+
+    def test_invocation_machinery_is_trimmed(self, pyinstrument_invocation, tmp_path: Path):
+        busy_wait_py = tmp_path / "busy_wait.py"
+        busy_wait_py.write_text(BUSY_WAIT_SCRIPT)
+
+        output = subprocess.check_output(
+            [
+                *pyinstrument_invocation,
+                "--show-all",
+                str(busy_wait_py),
+            ],
+            universal_newlines=True,
+        )
+
+        print("Output:")
+        print(output)
+
+        first_profiling_line = re.search(r"^\d+(\.\d+)?\s+([^\s]+)\s+(.*)", output, re.MULTILINE)
+        assert first_profiling_line
+
+        function_name = first_profiling_line.group(2)
+        location = first_profiling_line.group(3)
+
+        assert function_name == "<module>"
+        assert "busy_wait.py" in location

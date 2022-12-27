@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, List
 
 from pyinstrument import processors
-from pyinstrument.frame import BaseFrame
+from pyinstrument.frame import Frame
 from pyinstrument.session import Session
 
 # pyright: strict
@@ -17,6 +17,28 @@ class Renderer:
     Abstract base class for renderers.
     """
 
+    output_file_extension: str = "txt"
+    """
+    Renderer output file extension without dot prefix. The default value is `txt`
+    """
+
+    def __init__(self):
+        pass
+
+    def render(self, session: Session) -> str:
+        """
+        Return a string that contains the rendered form of `frame`.
+        """
+        raise NotImplementedError()
+
+
+class FrameRenderer(Renderer):
+    """
+    An abstract base class for renderers that process Frame objects using
+    processor functions. Provides a common interface to manipulate the
+    processors before rendering.
+    """
+
     processors: ProcessorList
     """
     Processors installed on this renderer. This property is defined on the
@@ -27,10 +49,6 @@ class Renderer:
     processor_options: dict[str, Any]
     """
     Dictionary containing processor options, passed to each processor.
-    """
-
-    output_file_extension: str = "txt"
-    """Renderer output file extension with out dot prefix. The default value is `txt`
     """
 
     def __init__(
@@ -60,7 +78,7 @@ class Renderer:
         """
         raise NotImplementedError()
 
-    def preprocess(self, root_frame: BaseFrame | None) -> BaseFrame | None:
+    def preprocess(self, root_frame: Frame | None) -> Frame | None:
         frame = root_frame
         for processor in self.processors:
             frame = processor(frame, options=self.processor_options)

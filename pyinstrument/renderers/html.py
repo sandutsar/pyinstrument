@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import codecs
-import os
 import tempfile
 import urllib.parse
 import webbrowser
+from pathlib import Path
 from typing import Any
 
 from pyinstrument import processors
-from pyinstrument.renderers.base import ProcessorList, Renderer
+from pyinstrument.renderers.base import FrameRenderer, ProcessorList
 from pyinstrument.renderers.jsonrenderer import JSONRenderer
 from pyinstrument.session import Session
 
 # pyright: strict
 
 
-class HTMLRenderer(Renderer):
+class HTMLRenderer(FrameRenderer):
     """
     Renders a rich, interactive web page, as a string of HTML.
     """
@@ -26,38 +26,39 @@ class HTMLRenderer(Renderer):
         super().__init__(**kwargs)
 
     def render(self, session: Session):
-        resources_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "html_resources/")
+        resources_dir = Path(__file__).parent / "html_resources"
 
-        if not os.path.exists(os.path.join(resources_dir, "app.js")):
+        js_file = resources_dir / "app.js"
+        css_file = resources_dir / "app.css"
+
+        if not js_file.exists() or not css_file.exists():
             raise RuntimeError(
-                "Could not find app.js. If you are running "
-                "pyinstrument from a git checkout, run 'python "
-                "setup.py build' to compile the Javascript "
-                "(requires nodejs)."
+                "Could not find app.js / app.css. Perhaps you need to run bin/build_js_bundle.py?"
             )
 
-        with open(os.path.join(resources_dir, "app.js"), encoding="utf-8") as f:
-            js = f.read()
+        js = js_file.read_text()
+        css = css_file.read_text()
 
         session_json = self.render_json(session)
 
-        page = """<!DOCTYPE html>
+        page = f"""<!DOCTYPE html>
             <html>
             <head>
                 <meta charset="utf-8">
             </head>
             <body>
                 <div id="app"></div>
+
+                <script>{js}</script>
+                <style>{css}</style>
+
                 <script>
-                    window.profileSession = {session_json}
-                </script>
-                <script>
-                    {js}
+                    const sessionData = {session_json};
+                    pyinstrumentHTMLRenderer.render(document.getElementById('app'), sessionData);
                 </script>
             </body>
-            </html>""".format(
-            js=js, session_json=session_json
-        )
+            </html>
+        """
 
         return page
 
@@ -92,9 +93,11 @@ class HTMLRenderer(Renderer):
     def default_processors(self) -> ProcessorList:
         return [
             processors.remove_importlib,
+            processors.remove_tracebackhide,
             processors.merge_consecutive_self_time,
             processors.aggregate_repeated_calls,
             processors.group_library_frames_processor,
             processors.remove_unnecessary_self_time_nodes,
             processors.remove_irrelevant_nodes,
+            processors.remove_first_pyinstrument_frames_processor,
         ]

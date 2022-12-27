@@ -11,6 +11,7 @@ __pycache__/
 
 # C extensions
 *.so
+*.pyd
 
 # distribution
 dist/
@@ -23,6 +24,8 @@ build
 .pytest_cache
 
 # editor
+*.code-workspace
+.history
 .vscode
 
 # docs
